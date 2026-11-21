@@ -43,6 +43,19 @@
     .section-title{margin-top:38px}
     footer{text-align:center;padding:30px 18px;color:var(--muted)}
     .note{font-size:14px;color:var(--muted)}
+
+    .builder{display:grid;gap:14px;margin-top:16px}
+    .builder input,.builder select,.question-editor input{width:100%;padding:11px 12px;border:1px solid #cfd9e6;border-radius:9px;background:#fff;color:var(--ink)}
+    .builder label,.question-editor label{display:grid;gap:6px;font-weight:700}
+    .question-editor{border:1px solid var(--line);border-radius:12px;padding:16px;display:grid;gap:10px;background:#fbfdff}
+    .question-editor h4{margin:0}
+    .builder-actions{display:flex;gap:10px;flex-wrap:wrap}
+    .secondary{background:#e8edf4;color:var(--ink)}
+    .danger{background:#fff0f0;color:#b42318}
+    .small-note{font-size:13px;color:var(--muted)}
+    .hidden{display:none!important}
+    @media(max-width:600px){.builder-actions button{width:100%}}
+
     @media(max-width:600px){header{padding:15px 5%}.hero{padding:48px 6%}main{margin:26px auto}.filters select{width:100%}#quiz{padding:19px}}
   </style>
 </head>
@@ -85,8 +98,42 @@
 
   <h2 class="section-title" id="createTitle">Создавай свои тесты</h2>
   <div class="card">
-    <p id="createText">Возможность создавать и публиковать собственные тесты появится на следующем этапе развития платформы.</p>
-    <p class="note" id="createNote">Сейчас доступны демонстрационные тесты без регистрации.</p>
+    <p id="createText">Создайте собственный тест: добавьте вопросы и отметьте правильные ответы.</p>
+    <p class="note" id="createNote">Ваши тесты сохраняются в этом браузере на этом компьютере.</p>
+    <button class="primary" type="button" id="openBuilder" onclick="toggleBuilder()">＋ Добавить тест</button>
+    <form id="builder" class="builder hidden">
+      <label><span id="labelTestName">Название теста</span><input id="testName" maxlength="100" required placeholder="Например: Математика — дроби"></label>
+      <label><span id="labelGrade">Класс</span>
+        <select id="testGrade" required>
+          <option value="">Выберите класс</option>
+          <option value="1">1 класс</option>
+<option value="2">2 класс</option>
+<option value="3">3 класс</option>
+<option value="4">4 класс</option>
+<option value="5">5 класс</option>
+<option value="6">6 класс</option>
+<option value="7">7 класс</option>
+<option value="8">8 класс</option>
+<option value="9">9 класс</option>
+<option value="10">10 класс</option>
+<option value="11">11 класс</option>
+        </select>
+      </label>
+      <label><span id="labelSubject">Предмет</span>
+        <select id="testSubject" required>
+          <option value="Математика">Математика</option><option value="История">История</option>
+          <option value="Биология">Биология</option><option value="Английский">Английский</option>
+          <option value="Другое">Другое</option>
+        </select>
+      </label>
+      <div id="questionEditors"></div>
+      <div class="builder-actions">
+        <button class="secondary" type="button" id="addQuestion" onclick="addQuestionEditor()">＋ Добавить вопрос</button>
+        <button class="primary" type="submit" id="saveTest">Сохранить тест</button>
+        <button class="secondary" type="button" id="cancelBuilder" onclick="toggleBuilder(false)">Отмена</button>
+      </div>
+      <p class="small-note" id="storageNote">Сохранённые тесты останутся в этом браузере. Очистка данных браузера может удалить их.</p>
+    </form>
   </div>
 </main>
 
@@ -94,72 +141,157 @@
 
 <script>
 let kk = false;
-const data = [
-  {grade:5,subject:"Математика",title:"Математика · 5 класс",q:"Сколько будет 12 × 5?",a:["50","60","65","55"],correct:1},
-  {grade:6,subject:"История",title:"История · 6 класс",q:"На каком континенте находится Египет?",a:["Азия","Европа","Африка","Австралия"],correct:2},
-  {grade:7,subject:"Биология",title:"Биология · 7 класс",q:"Какой орган перекачивает кровь?",a:["Лёгкие","Сердце","Печень","Почки"],correct:1},
-  {grade:8,subject:"Английский",title:"English · 8 класс",q:"What is the plural of 'child'?",a:["Childs","Childes","Children","Child"],correct:2}
+const demoData = [
+  {grade:5,subject:"Математика",title:"Математика · 5 класс",questions:[{q:"Сколько будет 12 × 5?",a:["50","60","65","55"],correct:1}]},
+  {grade:6,subject:"История",title:"История · 6 класс",questions:[{q:"На каком континенте находится Египет?",a:["Азия","Европа","Африка","Австралия"],correct:2}]},
+  {grade:7,subject:"Биология",title:"Биология · 7 класс",questions:[{q:"Какой орган перекачивает кровь?",a:["Лёгкие","Сердце","Печень","Почки"],correct:1}]},
+  {grade:8,subject:"Английский",title:"English · 8 класс",questions:[{q:"What is the plural of 'child'?",a:["Childs","Childes","Children","Child"],correct:2}]}
 ];
-let current = null, selected = null;
+const STORAGE_KEY = "bilimtest_custom_tests_v1";
+let savedTests = loadSavedTests();
+let current = null, selected = null, questionIndex = 0, score = 0;
 
 const $ = id => document.getElementById(id);
+function loadSavedTests(){
+  try {
+    const value = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
+    return Array.isArray(value) ? value.filter(t => t && Array.isArray(t.questions)) : [];
+  } catch(e) { return []; }
+}
+function saveSavedTests(){
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(savedTests)); return true; }
+  catch(e) { alert("Не удалось сохранить тест. Возможно, в браузере недостаточно места."); return false; }
+}
 for (let i=1;i<=11;i++) {
   const option=document.createElement("option");
   option.value=String(i);
   option.textContent=`${i} ${kk ? "сынып" : "класс"}`;
   $("grade").append(option);
 }
+function allTests(){ return [...demoData, ...savedTests]; }
 
 function render() {
   const g=$("grade").value, s=$("subject").value;
-  const list=data.filter(t=>(g==="all"||t.grade===Number(g))&&(s==="all"||t.subject===s));
+  const list=allTests().filter(t=>(g==="all"||t.grade===Number(g))&&(s==="all"||t.subject===s));
   $("tests").innerHTML="";
   if (!list.length) {
     $("tests").textContent=kk?"Әзірге тест жоқ.":"Тестов пока нет.";
     return;
   }
   list.forEach(t=>{
-    const card=document.createElement("article");
-    card.className="card";
+    const card=document.createElement("article"); card.className="card";
     const h=document.createElement("h3"); h.textContent=kk?translateTitle(t):t.title;
-    const p=document.createElement("p"); p.textContent=`${kk?"Сынып":"Класс"}: ${t.grade} · ${kk?"Сұрақ":"Вопрос"}: 1`;
+    const p=document.createElement("p"); p.textContent=`${kk?"Сынып":"Класс"}: ${t.grade} · ${kk?"Сұрақ":"Вопросов"}: ${t.questions.length}`;
     const b=document.createElement("button"); b.type="button"; b.textContent=kk?"Тестті бастау":"Начать тест";
-    b.addEventListener("click",()=>startQuiz(data.indexOf(t)));
-    card.append(h,p,b); $("tests").append(card);
+    b.addEventListener("click",()=>startQuiz(t));
+    card.append(h,p,b);
+    if(savedTests.includes(t)){
+      const del=document.createElement("button"); del.type="button"; del.className="danger"; del.style.marginLeft="8px";
+      del.textContent=kk?"Жою":"Удалить";
+      del.addEventListener("click",()=>deleteTest(t.id));
+      card.append(del);
+    }
+    $("tests").append(card);
   });
 }
 function translateTitle(t) {
-  const subjects={"Математика":"Математика","История":"Тарих","Биология":"Биология","Английский":"Ағылшын тілі"};
+  const subjects={"Математика":"Математика","История":"Тарих","Биология":"Биология","Английский":"Ағылшын тілі","Другое":"Басқа"};
   return `${subjects[t.subject]||t.subject} · ${t.grade} сынып`;
 }
-function startQuiz(i) {
-  current=data[i]; selected=null;
+function startQuiz(test) {
+  current=test; selected=null; questionIndex=0; score=0;
   $("quiz").style.display="block";
   $("result").textContent="";
-  $("next").style.display="inline-block";
-  $("next").disabled=false;
+  $("next").style.display="inline-block"; $("next").disabled=false;
   $("quiz").scrollIntoView({behavior:"smooth",block:"start"});
   showQuestion();
 }
 function showQuestion() {
-  $("question").textContent=current.q;
+  const q=current.questions[questionIndex];
+  $("question").textContent=`${kk?"Сұрақ":"Вопрос"} ${questionIndex+1}/${current.questions.length}: ${q.q}`;
   $("answers").innerHTML="";
-  current.a.forEach((answer,i)=>{
+  $("result").textContent="";
+  selected=null;
+  q.a.forEach((answer,i)=>{
     const label=document.createElement("label"); label.className="answer";
     const radio=document.createElement("input"); radio.type="radio"; radio.name="answer"; radio.value=String(i);
     radio.addEventListener("change",()=>selected=i);
     const span=document.createElement("span"); span.textContent=answer;
     label.append(radio,span); $("answers").append(label);
   });
+  $("next").textContent=questionIndex===current.questions.length-1?(kk?"Аяқтау":"Завершить тест"):(kk?"Келесі сұрақ":"Следующий вопрос");
 }
 function nextQuestion() {
   if(selected===null){alert(kk?"Жауапты таңда!":"Выбери ответ!");return;}
-  const score=selected===current.correct?1:0;
+  if(selected===current.questions[questionIndex].correct) score++;
+  questionIndex++;
+  if(questionIndex<current.questions.length){showQuestion();return;}
   $("answers").innerHTML="";
   $("question").textContent=kk?"Тест аяқталды!":"Тест завершён!";
   $("next").style.display="none";
-  $("result").textContent=(kk?"Нәтиже: ":"Результат: ")+score+"/1";
+  $("result").textContent=(kk?"Нәтиже: ":"Результат: ")+score+"/"+current.questions.length;
 }
+function toggleBuilder(force){
+  const form=$("builder");
+  const open=typeof force==="boolean"?force:form.classList.contains("hidden");
+  form.classList.toggle("hidden",!open);
+  if(open && !$("questionEditors").children.length) addQuestionEditor();
+  if(open) form.scrollIntoView({behavior:"smooth",block:"start"});
+}
+function addQuestionEditor(){
+  const n=$("questionEditors").children.length+1;
+  const box=document.createElement("div"); box.className="question-editor"; box.dataset.question="1";
+  const heading=document.createElement("h4"); heading.textContent=(kk?"Сұрақ":"Вопрос")+" "+n; box.append(heading);
+  const qLabel=document.createElement("label"); qLabel.textContent=kk?"Сұрақ мәтіні":"Текст вопроса";
+  const qInput=document.createElement("input"); qInput.className="q-text"; qInput.required=true; qInput.maxLength=500; qInput.placeholder=kk?"Сұрақты жазыңыз":"Введите вопрос";
+  qLabel.append(qInput); box.append(qLabel);
+  const radios=[];
+  for(let i=0;i<4;i++){
+    const label=document.createElement("label"); label.textContent=(kk?"Жауап нұсқасы ":"Вариант ответа ")+(i+1);
+    const input=document.createElement("input"); input.className="q-answer"; input.required=true; input.maxLength=200;
+    input.placeholder=(kk?"Жауап ":"Ответ ")+(i+1); label.append(input); box.append(label);
+    radios.push(input);
+  }
+  const correctLabel=document.createElement("label"); correctLabel.textContent=kk?"Дұрыс жауап":"Правильный ответ";
+  const select=document.createElement("select"); select.className="q-correct";
+  for(let i=0;i<4;i++){const op=document.createElement("option");op.value=String(i);op.textContent=(kk?"Жауап ":"Ответ ")+(i+1);select.append(op);}
+  correctLabel.append(select); box.append(correctLabel);
+  if(n>1){
+    const remove=document.createElement("button"); remove.type="button"; remove.className="danger";
+    remove.textContent=kk?"Сұрақты жою":"Удалить вопрос";
+    remove.addEventListener("click",()=>{box.remove(); renumberQuestions();});
+    box.append(remove);
+  }
+  $("questionEditors").append(box); renumberQuestions();
+}
+function renumberQuestions(){
+  [...$("questionEditors").children].forEach((el,i)=>{el.querySelector("h4").textContent=(kk?"Сұрақ ":"Вопрос ")+(i+1);});
+}
+function deleteTest(id){
+  if(!confirm(kk?"Бұл тесті жоясыз ба?":"Удалить этот тест?")) return;
+  savedTests=savedTests.filter(t=>t.id!==id);
+  if(saveSavedTests()) render();
+}
+$("builder").addEventListener("submit",function(event){
+  event.preventDefault();
+  const questions=[...$("questionEditors").children].map(box=>({
+    q:box.querySelector(".q-text").value.trim(),
+    a:[...box.querySelectorAll(".q-answer")].map(x=>x.value.trim()),
+    correct:Number(box.querySelector(".q-correct").value)
+  }));
+  if(!questions.length || questions.some(q=>!q.q || q.a.some(a=>!a))) {
+    alert(kk?"Барлық сұрақтар мен жауаптарды толтырыңыз.":"Заполните каждый вопрос и все четыре варианта ответа."); return;
+  }
+  const test={
+    id:"custom_"+Date.now()+"_"+Math.random().toString(36).slice(2,8),
+    title:$("testName").value.trim(), grade:Number($("testGrade").value),
+    subject:$("testSubject").value, questions
+  };
+  savedTests.push(test);
+  if(!saveSavedTests()){savedTests.pop();return;}
+  this.reset(); $("questionEditors").innerHTML=""; toggleBuilder(false); render();
+  alert(kk?"Тест сақталды!":"Тест сохранён!");
+});
 function toggleLang() {
   kk=!kk;
   $("lang").textContent=kk?"Русский":"Қазақша";
@@ -169,17 +301,23 @@ function toggleLang() {
   $("choose").textContent=kk?"Сыныбыңды таңда":"Выбери свой класс";
   $("testsTitle").textContent=kk?"Қолжетімді тесттер":"Доступные тесты";
   $("createTitle").textContent=kk?"Өз тесттеріңді жаса":"Создавай свои тесты";
-  $("createText").textContent=kk?"Өз тесттеріңді жасау мүмкіндігі платформаның келесі даму кезеңінде қосылады.":"Возможность создавать и публиковать собственные тесты появится на следующем этапе развития платформы.";
-  $("createNote").textContent=kk?"Қазір тіркелусіз демонстрациялық тесттер қолжетімді.":"Сейчас доступны демонстрационные тесты без регистрации.";
+  $("createText").textContent=kk?"Өз тестіңді жаса: сұрақтар қосып, дұрыс жауаптарды белгіле.":"Создайте собственный тест: добавьте вопросы и отметьте правильные ответы.";
+  $("createNote").textContent=kk?"Тесттер осы компьютердегі браузерде сақталады.":"Ваши тесты сохраняются в этом браузере на этом компьютере.";
+  $("openBuilder").textContent=kk?"＋ Тест қосу":"＋ Добавить тест";
+  $("labelTestName").textContent=kk?"Тест атауы":"Название теста";
+  $("labelGrade").textContent=kk?"Сынып":"Класс";
+  $("labelSubject").textContent=kk?"Пән":"Предмет";
+  $("addQuestion").textContent=kk?"＋ Сұрақ қосу":"＋ Добавить вопрос";
+  $("saveTest").textContent=kk?"Тестті сақтау":"Сохранить тест";
+  $("cancelBuilder").textContent=kk?"Болдырмау":"Отмена";
+  $("storageNote").textContent=kk?"Сақталған тесттер осы браузерде қалады. Браузер деректерін тазалау оларды өшіруі мүмкін.":"Сохранённые тесты останутся в этом браузере. Очистка данных браузера может удалить их.";
   $("grade").options[0].textContent=kk?"Барлық сыныптар":"Все классы";
   for(let i=1;i<$("grade").options.length;i++) $("grade").options[i].textContent=`${i} ${kk?"сынып":"класс"}`;
   $("subject").options[0].textContent=kk?"Барлық пәндер":"Все предметы";
   const names=kk?["Математика","Тарих","Биология","Ағылшын тілі"]:["Математика","История","Биология","Английский"];
   for(let i=1;i<=$("subject").options.length-1;i++) $("subject").options[i].textContent=names[i-1];
   $("next").textContent=kk?"Жауап беру":"Ответить";
-  if(current && $("quiz").style.display!=="none") {
-    $("question").textContent=kk?"Сұраққа жауап бер:":"Ответь на вопрос:";
-  }
+  if(current && $("quiz").style.display!=="none") showQuestion();
   render();
 }
 render();
