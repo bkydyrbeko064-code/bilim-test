@@ -101,6 +101,15 @@
     <p id="createText">Создайте собственный тест: добавьте вопросы и отметьте правильные ответы.</p>
     <p class="note" id="createNote">Ваши тесты сохраняются в этом браузере на этом компьютере.</p>
     <button class="primary" type="button" id="openBuilder" onclick="toggleBuilder()">＋ Добавить тест</button>
+    <div style="margin-top:18px;padding-top:16px;border-top:1px solid var(--line)">
+      <h3>📂 Загрузить тест из файла</h3>
+      <p class="note">Excel: столбцы Вопрос, A, B, C, D, Правильный ответ. Word/PDF: каждый вопрос отдельным блоком, варианты A)–D), затем «Ответ: B». После загрузки обязательно проверьте распознавание.</p>
+      <label style="display:grid;gap:8px;font-weight:700">Выберите файл
+        <input id="importFile" type="file" accept=".xlsx,.xls,.docx,.pdf" style="width:100%;padding:10px;border:1px solid #cfd9e6;border-radius:9px;background:#fff">
+      </label>
+      <div id="importStatus" class="small-note" aria-live="polite" style="margin-top:8px"></div>
+      <div id="importReview" class="builder hidden"></div>
+    </div>
     <form id="builder" class="builder hidden">
       <label><span id="labelTestName">Название теста</span><input id="testName" maxlength="100" required placeholder="Например: Математика — дроби"></label>
       <label><span id="labelGrade">Класс</span>
@@ -320,6 +329,137 @@ function toggleLang() {
   if(current && $("quiz").style.display!=="none") showQuestion();
   render();
 }
+
+// File import: Excel, Word and PDF. Libraries are loaded only when the matching file is selected.
+let importedQuestions = [];
+function loadScriptOnce(src, test) {
+  return new Promise((resolve,reject)=>{
+    if(test()){resolve();return;}
+    const existing=[...document.scripts].find(s=>s.src===src);
+    if(existing){existing.addEventListener("load",resolve,{once:true});existing.addEventListener("error",reject,{once:true});return;}
+    const s=document.createElement("script");s.src=src;s.onload=resolve;s.onerror=()=>reject(new Error("Не удалось загрузить библиотеку обработки файла. Проверьте подключение к интернету."));document.head.append(s);
+  });
+}
+function normalizeCorrect(value, answers) {
+  const v=String(value??"").trim();
+  if(!v)return -1;
+  if(/^[1-4]$/.test(v))return Number(v)-1;
+  const letter=v.toUpperCase().match(/[A-DА-Г]/)?.[0];
+  if(letter){const map={"A":0,"B":1,"C":2,"D":3,"А":0,"Б":1,"В":2,"Г":3};return map[letter]??-1;}
+  return answers.findIndex(a=>a.trim().toLowerCase()===v.toLowerCase());
+}
+function cleanCell(v){return String(v??"").replace(/\s+/g," ").trim();}
+function parseRows(rows){
+  const out=[];
+  for(const row of rows){
+    const cells=row.map(cleanCell);
+    if(!cells.some(Boolean))continue;
+    const first=cells[0].toLowerCase();
+    if(/^(вопрос|сұрақ|question|№|номер)$/.test(first))continue;
+    // Expected spreadsheet columns: question, option A, B, C, D, correct answer.
+    if(cells.length>=6 && cells[1] && cells[2] && cells[3] && cells[4]){
+      const a=cells.slice(1,5), correct=normalizeCorrect(cells[5],a);
+      out.push({q:cells[0],a,correct});
+    }
+  }
+  return out;
+}
+function parseTextQuestions(text){
+  const normalized=text.replace(/\r/g,"").replace(/[ \t]+/g," ");
+  const chunks=normalized.split(/(?=(?:^|\n)\s*(?:Вопрос\s*\d*|Сұрақ\s*\d*|Question\s*\d*|\d+[.)])\s*[:.)-]?)/im);
+  const out=[];
+  for(let chunk of chunks){
+    chunk=chunk.trim(); if(!chunk)continue;
+    const qMatch=chunk.match(/^(?:(?:Вопрос|Сұрақ|Question)\s*\d*\s*[:.)-]?|\d+[.)])\s*(.+?)(?=\n|$)/i);
+    let q=qMatch?qMatch[1].trim():"";
+    if(!q){
+      const lines=chunk.split("\n").map(x=>x.trim()).filter(Boolean);
+      q=lines[0]||"";
+    }
+    const answers=["A","B","C","D"].map(letter=>{
+      const m=chunk.match(new RegExp("(?:^|\\\\n)\\\\s*"+letter+"[).:]\\\\s*(.+?)(?=\\\\n|$)","i"));
+      return m?m[1].trim():"";
+    });
+    const answerMatch=chunk.match(/(?:правильный\s*ответ|ответ|дұрыс\s*жауап|correct\s*answer)\s*[:=-]\s*([A-DА-Г1-4])/i);
+    if(q && answers.every(Boolean)){
+      out.push({q,a:answers,correct:answerMatch?normalizeCorrect(answerMatch[1],answers):-1});
+    }
+  }
+  return out;
+}
+async function extractFile(file){
+  const ext=file.name.split(".").pop().toLowerCase();
+  if(ext==="xlsx"||ext==="xls"){
+    await loadScriptOnce("https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js",()=>!!window.XLSX);
+    const data=await file.arrayBuffer(), wb=XLSX.read(data,{type:"array"});
+    const rows=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{header:1,defval:""});
+    return parseRows(rows);
+  }
+  if(ext==="docx"){
+    await loadScriptOnce("https://cdn.jsdelivr.net/npm/mammoth@1.8.0/mammoth.browser.min.js",()=>!!window.mammoth);
+    const data=await file.arrayBuffer(), result=await mammoth.extractRawText({arrayBuffer:data});
+    return parseTextQuestions(result.value);
+  }
+  if(ext==="pdf"){
+    await loadScriptOnce("https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js",()=>!!window.pdfjsLib);
+    pdfjsLib.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+    const data=await file.arrayBuffer(), pdf=await pdfjsLib.getDocument({data}).promise;
+    let text="";
+    for(let i=1;i<=pdf.numPages;i++){
+      const page=await pdf.getPage(i), content=await page.getTextContent();
+      text+=content.items.map(x=>x.str).join(" ")+"\n";
+    }
+    return parseTextQuestions(text);
+  }
+  throw new Error("Формат не поддерживается. Выберите .xlsx, .docx или .pdf.");
+}
+function showImportReview(questions){
+  const panel=$("importReview"); panel.innerHTML=""; importedQuestions=questions;
+  const title=document.createElement("h3");title.textContent=`Распознано вопросов: ${questions.length}`;panel.append(title);
+  const note=document.createElement("p");note.className="small-note";note.textContent="Проверьте текст вопросов, варианты и правильные ответы. Если ответ не распознан, выберите его вручную.";panel.append(note);
+  questions.forEach((q,i)=>{
+    const box=document.createElement("div");box.className="question-editor";
+    const h=document.createElement("h4");h.textContent=`Вопрос ${i+1}`;box.append(h);
+    const qi=document.createElement("input");qi.value=q.q;qi.maxLength=500;qi.setAttribute("aria-label","Текст вопроса");box.append(qi);
+    const answerInputs=[];
+    q.a.forEach((a,j)=>{const label=document.createElement("label");label.textContent=`Вариант ${"ABCD"[j]}`;const input=document.createElement("input");input.value=a;input.maxLength=200;label.append(input);box.append(label);answerInputs.push(input);});
+    const label=document.createElement("label");label.textContent="Правильный ответ";
+    const sel=document.createElement("select");
+    ["Выберите правильный ответ","A","B","C","D"].forEach((v,j)=>{const op=document.createElement("option");op.value=j?String(j-1):"";op.textContent=v;sel.append(op);});
+    if(q.correct>=0)sel.value=String(q.correct);
+    label.append(sel);box.append(label);
+    importedQuestions[i]={...q,_inputs:{qi,answerInputs,sel}};
+    panel.append(box);
+  });
+  const save=document.createElement("button");save.className="primary";save.type="button";save.textContent="Сохранить импортированный тест";
+  save.addEventListener("click",saveImportedTest);panel.append(save);
+  panel.classList.remove("hidden");
+}
+function saveImportedTest(){
+  const title=prompt("Название теста:","Импортированный тест");if(!title)return;
+  const grade=Number(prompt("Для какого класса? Введите число от 1 до 11:","5"));
+  if(!Number.isInteger(grade)||grade<1||grade>11){alert("Укажите класс от 1 до 11.");return;}
+  const subject=prompt("Предмет (например: Математика, История, Биология, Английский):","Математика")||"Другое";
+  const questions=importedQuestions.map(q=>({q:q._inputs.qi.value.trim(),a:q._inputs.answerInputs.map(x=>x.value.trim()),correct:Number(q._inputs.sel.value)}));
+  if(questions.some(q=>!q.q||q.a.some(x=>!x)||!Number.isInteger(q.correct)||q.correct<0||q.correct>3)){
+    alert("Заполните вопросы и все варианты, а также выберите правильный ответ для каждого вопроса.");return;
+  }
+  const test={id:"import_"+Date.now(),title,grade,subject,questions};
+  savedTests.push(test);
+  if(!saveSavedTests()){savedTests.pop();return;}
+  $("importReview").classList.add("hidden");$("importReview").innerHTML="";$("importFile").value="";$("importStatus").textContent="Тест сохранён в этом браузере.";
+  render();alert("Тест успешно сохранён!");
+}
+$("importFile").addEventListener("change",async function(){
+  const file=this.files[0];if(!file)return;
+  $("importStatus").textContent="Читаю файл…";$("importReview").classList.add("hidden");
+  try{
+    const questions=await extractFile(file);
+    if(!questions.length)throw new Error("Не удалось распознать вопросы. Проверьте формат файла и используйте шаблон структуры.");
+    $("importStatus").textContent=`Найдено вопросов: ${questions.length}. Проверьте распознавание ниже.`;
+    showImportReview(questions);
+  }catch(e){$("importStatus").textContent=e.message;alert(e.message);}
+});
 render();
 </script>
 </body>
