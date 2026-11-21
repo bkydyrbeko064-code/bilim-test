@@ -343,9 +343,9 @@ function loadScriptOnce(src, test) {
 function normalizeCorrect(value, answers) {
   const v=String(value??"").trim();
   if(!v)return -1;
-  if(/^[1-4]$/.test(v))return Number(v)-1;
-  const letter=v.toUpperCase().match(/[A-DА-Г]/)?.[0];
-  if(letter){const map={"A":0,"B":1,"C":2,"D":3,"А":0,"Б":1,"В":2,"Г":3};return map[letter]??-1;}
+  if(/^[1-5]$/.test(v))return Number(v)-1;
+  const letter=v.toUpperCase().match(/[A-EА-ЕБ]/)?.[0];
+  if(letter){const map={"A":0,"B":1,"C":2,"D":3,"E":4,"А":0,"Б":1,"В":2,"Г":3,"Д":3,"Е":4};return map[letter]??-1;}
   return answers.findIndex(a=>a.trim().toLowerCase()===v.toLowerCase());
 }
 function cleanCell(v){return String(v??"").replace(/\s+/g," ").trim();}
@@ -366,26 +366,93 @@ function parseRows(rows){
 }
 function parseTextQuestions(text){
   const normalized=text.replace(/\r/g,"").replace(/[ \t]+/g," ");
+  // Supports the user's Kazakh Word layout: subject sections, numbered questions,
+  // options А/В/С/Д/Е, and answer keys collected at the end.
+  if(/Жауабы\s*:/i.test(normalized) && /Оқу\s+сауатт|Математика\s+сауаттылығы|Жаратылыстану/i.test(normalized)){
+    return parseKazakhTestDocument(normalized);
+  }
   const chunks=normalized.split(/(?=(?:^|\n)\s*(?:Вопрос\s*\d*|Сұрақ\s*\d*|Question\s*\d*|\d+[.)])\s*[:.)-]?)/im);
   const out=[];
   for(let chunk of chunks){
     chunk=chunk.trim(); if(!chunk)continue;
     const qMatch=chunk.match(/^(?:(?:Вопрос|Сұрақ|Question)\s*\d*\s*[:.)-]?|\d+[.)])\s*(.+?)(?=\n|$)/i);
     let q=qMatch?qMatch[1].trim():"";
-    if(!q){
-      const lines=chunk.split("\n").map(x=>x.trim()).filter(Boolean);
-      q=lines[0]||"";
-    }
+    if(!q){const lines=chunk.split("\n").map(x=>x.trim()).filter(Boolean);q=lines[0]||"";}
     const answers=["A","B","C","D"].map(letter=>{
       const m=chunk.match(new RegExp("(?:^|\\\\n)\\\\s*"+letter+"[).:]\\\\s*(.+?)(?=\\\\n|$)","i"));
       return m?m[1].trim():"";
     });
     const answerMatch=chunk.match(/(?:правильный\s*ответ|ответ|дұрыс\s*жауап|correct\s*answer)\s*[:=-]\s*([A-DА-Г1-4])/i);
-    if(q && answers.every(Boolean)){
-      out.push({q,a:answers,correct:answerMatch?normalizeCorrect(answerMatch[1],answers):-1});
-    }
+    if(q && answers.every(Boolean))out.push({q,a:answers,correct:answerMatch?normalizeCorrect(answerMatch[1],answers):-1});
   }
   return out;
+}
+function parseKazakhTestDocument(text){
+  // Supports Word documents where questions are numbered by Word's automatic
+  // numbering (the number may be absent from extracted text), options use А./А),
+  // and the answer key is grouped by subject at the end.
+  const lines=text.replace(/\r/g,"").split("\n").map(x=>x.replace(/\u00a0/g," ").replace(/[ \t]+/g," ").trim()).filter(Boolean);
+  const subjectNames=["Оқу сауаттылығы","Математика сауаттылығы","Жаратылыстану"];
+  const groups=Object.fromEntries(subjectNames.map(n=>[n,[]]));
+  const keyLists={}; let subject="",inKey=false,keySubject="";
+  const letterMap={"А":0,"A":0,"Б":1,"В":1,"B":1,"С":2,"C":2,"Д":3,"D":3,"Е":4,"E":4};
+  const optionRe=/^([АБВСДЕABCDE])\s*[).:]\s*(.+)$/i;
+  const keyLetterRe=/^([АБВСДЕABCDE])\s*[).:]?\s*$/i;
+  const questionNumberRe=/^\d{1,2}\s*[.)]\s*(.+)$/;
+  function identifySubject(line){
+    const s=line.toLowerCase().replace(/ё/g,"е");
+    if(/оқу\s+сауатт+ылығы/.test(s))return subjectNames[0];
+    if(/математика\s+сауаттылығы/.test(s))return subjectNames[1];
+    if(/жаратылыстану/.test(s))return subjectNames[2];
+    return "";
+  }
+  for(let i=0;i<lines.length;i++){
+    const line=lines[i];
+    if(/^жауабы\s*:/i.test(line)){inKey=true;subject="";keySubject="";continue;}
+    const detected=identifySubject(line);
+    if(detected){
+      if(inKey)keySubject=detected;
+      else subject=detected;
+      continue;
+    }
+    if(inKey){
+      const km=line.match(keyLetterRe);
+      if(km && keySubject){
+        const letter=km[1].toUpperCase();
+        const idx=letterMap[letter];
+        if(Number.isInteger(idx))(keyLists[keySubject]??=[]).push(idx);
+      }
+      continue;
+    }
+    if(!subject)continue;
+    // A question prompt may have a Word auto-number not present in plain text.
+    let prompt=line.match(questionNumberRe);
+    let promptText=prompt?prompt[1].trim():line;
+    if(optionRe.test(line))continue;
+    if(i+1>=lines.length || !optionRe.test(lines[i+1]))continue;
+    const opts=[]; let j=i+1;
+    while(j<lines.length){
+      const om=lines[j].match(optionRe);
+      if(!om)break;
+      const letter=om[1].toUpperCase();
+      const idx=letterMap[letter];
+      if(Number.isInteger(idx))opts.push({idx,text:om[2].trim()});
+      j++;
+    }
+    // A valid multiple-choice question in this document has four or five choices.
+    if(opts.length>=4){
+      const ordered=opts.sort((a,b)=>a.idx-b.idx);
+      // Keep the original prompt intact; do not mistake story headings for questions.
+      groups[subject].push({q:promptText,a:ordered.map(o=>o.text),correct:-1,subject});
+      i=j-1;
+    }
+  }
+  // The answer key lists answers in the same order as questions within each subject.
+  for(const name of subjectNames){
+    const answers=keyLists[name]||[];
+    (groups[name]||[]).forEach((q,i)=>{if(Number.isInteger(answers[i]))q.correct=answers[i];});
+  }
+  return subjectNames.flatMap(name=>groups[name]||[]);
 }
 async function extractFile(file){
   const ext=file.name.split(".").pop().toLowerCase();
@@ -422,10 +489,10 @@ function showImportReview(questions){
     const h=document.createElement("h4");h.textContent=`Вопрос ${i+1}`;box.append(h);
     const qi=document.createElement("input");qi.value=q.q;qi.maxLength=500;qi.setAttribute("aria-label","Текст вопроса");box.append(qi);
     const answerInputs=[];
-    q.a.forEach((a,j)=>{const label=document.createElement("label");label.textContent=`Вариант ${"ABCD"[j]}`;const input=document.createElement("input");input.value=a;input.maxLength=200;label.append(input);box.append(label);answerInputs.push(input);});
+    q.a.forEach((a,j)=>{const label=document.createElement("label");label.textContent=`Вариант ${"ABCDE"[j]}`;const input=document.createElement("input");input.value=a;input.maxLength=200;label.append(input);box.append(label);answerInputs.push(input);});
     const label=document.createElement("label");label.textContent="Правильный ответ";
     const sel=document.createElement("select");
-    ["Выберите правильный ответ","A","B","C","D"].forEach((v,j)=>{const op=document.createElement("option");op.value=j?String(j-1):"";op.textContent=v;sel.append(op);});
+    ["Выберите правильный ответ","A","B","C","D","E"].slice(0,q.a.length+1).forEach((v,j)=>{const op=document.createElement("option");op.value=j?String(j-1):"";op.textContent=v;sel.append(op);});
     if(q.correct>=0)sel.value=String(q.correct);
     label.append(sel);box.append(label);
     importedQuestions[i]={...q,_inputs:{qi,answerInputs,sel}};
@@ -441,14 +508,16 @@ function saveImportedTest(){
   if(!Number.isInteger(grade)||grade<1||grade>11){alert("Укажите класс от 1 до 11.");return;}
   const subject=prompt("Предмет (например: Математика, История, Биология, Английский):","Математика")||"Другое";
   const questions=importedQuestions.map(q=>({q:q._inputs.qi.value.trim(),a:q._inputs.answerInputs.map(x=>x.value.trim()),correct:Number(q._inputs.sel.value)}));
-  if(questions.some(q=>!q.q||q.a.some(x=>!x)||!Number.isInteger(q.correct)||q.correct<0||q.correct>3)){
+  if(questions.some(q=>!q.q||q.a.some(x=>!x)||!Number.isInteger(q.correct)||q.correct<0||q.correct>4)){
     alert("Заполните вопросы и все варианты, а также выберите правильный ответ для каждого вопроса.");return;
   }
-  const test={id:"import_"+Date.now(),title,grade,subject,questions};
-  savedTests.push(test);
-  if(!saveSavedTests()){savedTests.pop();return;}
+  const groups={};
+  questions.forEach((q,i)=>{const source=importedQuestions[i];const group=source.subject||subject;(groups[group]??=[]).push(q);});
+  const created=Object.entries(groups).map(([group,qs],i)=>({id:"import_"+Date.now()+"_"+i,title:Object.keys(groups).length>1?`${title} — ${group}`:title,grade,subject:group,questions:qs}));
+  savedTests.push(...created);
+  if(!saveSavedTests()){savedTests.splice(-created.length,created.length);return;}
   $("importReview").classList.add("hidden");$("importReview").innerHTML="";$("importFile").value="";$("importStatus").textContent="Тест сохранён в этом браузере.";
-  render();alert("Тест успешно сохранён!");
+  render();alert(created.length>1?`Сохранено тестов: ${created.length} (по предметам).`:"Тест успешно сохранён!");
 }
 $("importFile").addEventListener("change",async function(){
   const file=this.files[0];if(!file)return;
