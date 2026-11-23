@@ -58,12 +58,55 @@
 
     @media(max-width:600px){header{padding:15px 5%}.hero{padding:48px 6%}main{margin:26px auto}.filters select{width:100%}#quiz{padding:19px}}
   </style>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 </head>
 <body>
 <header>
   <div class="logo">Bilim<span>Test</span></div>
   <button class="lang" type="button" onclick="toggleLang()" id="lang">Қазақша</button>
 </header>
+
+
+<section class="card" id="accountPanel" style="max-width:1100px;margin:20px auto;padding:22px">
+  <h2>Личный кабинет BilimTest</h2>
+  <p id="authMessage" class="note">Войдите или зарегистрируйтесь, чтобы проходить тесты и сохранять результаты.</p>
+  <div id="authForms" class="builder" style="max-width:520px">
+    <label>Email<input id="authEmail" type="email" autocomplete="email" required placeholder="name@example.com"></label>
+    <label>Пароль<input id="authPassword" type="password" autocomplete="current-password" minlength="6" required placeholder="Не менее 6 символов"></label>
+    <div class="builder-actions">
+      <button class="primary" type="button" id="loginBtn">Войти</button>
+      <button class="secondary" type="button" id="signupBtn">Регистрация ученика</button>
+    </div>
+  </div>
+  <div id="signedInPanel" class="hidden">
+    <p id="userInfo"></p>
+    <button class="secondary" type="button" id="logoutBtn">Выйти</button>
+  </div>
+  <div id="adminPanel" class="hidden" style="margin-top:20px;border-top:1px solid var(--line);padding-top:18px">
+    <h3>Панель администратора</h3>
+    <p class="note">Администратор может публиковать тесты и создавать учётные записи учеников.</p>
+    <div class="builder" style="max-width:520px">
+      <label>Email нового ученика<input id="newStudentEmail" type="email" placeholder="student@example.com"></label>
+      <label>Временный пароль<input id="newStudentPassword" type="password" minlength="6" placeholder="Не менее 6 символов"></label>
+      <button class="primary" type="button" id="createStudentBtn">Создать аккаунт ученика</button>
+      <p id="adminStatus" class="small-note"></p>
+    </div>
+    <h3>Управление ролями</h3>
+    <p class="note">Введите email зарегистрированного пользователя, чтобы назначить или снять роль администратора.</p>
+    <div class="builder" style="max-width:520px">
+      <label>Email пользователя<input id="roleEmail" type="email" placeholder="user@example.com"></label>
+      <div class="builder-actions">
+        <button class="secondary" type="button" id="promoteBtn">Назначить администратором</button>
+        <button class="danger" type="button" id="demoteBtn">Сделать учеником</button>
+      </div>
+      <p id="roleStatus" class="small-note"></p>
+    </div>
+  </div>
+  <div id="studentResults" class="hidden" style="margin-top:20px">
+    <h3>Мои результаты</h3>
+    <div id="myResults" class="note">Результатов пока нет.</div>
+  </div>
+</section>
 
 <section class="hero">
   <h1 id="welcome">Проверь свои знания!</h1>
@@ -96,10 +139,10 @@
     <div id="result"></div>
   </section>
 
-  <h2 class="section-title" id="createTitle">Создавай свои тесты</h2>
-  <div class="card">
+  <h2 class="section-title" id="createTitle" class="admin-only">Создавай свои тесты</h2>
+  <div class="card" id="testBuilderCard">
     <p id="createText">Создайте собственный тест: добавьте вопросы и отметьте правильные ответы.</p>
-    <p class="note" id="createNote">Ваши тесты сохраняются в этом браузере на этом компьютере.</p>
+    <p class="note" id="createNote">Общие тесты доступны ученикам после публикации администратором.</p>
     <button class="primary" type="button" id="openBuilder" onclick="toggleBuilder()">＋ Добавить тест</button>
     <div style="margin-top:18px;padding-top:16px;border-top:1px solid var(--line)">
       <h3>📂 Загрузить тест из файла</h3>
@@ -311,7 +354,7 @@ function toggleLang() {
   $("testsTitle").textContent=kk?"Қолжетімді тесттер":"Доступные тесты";
   $("createTitle").textContent=kk?"Өз тесттеріңді жаса":"Создавай свои тесты";
   $("createText").textContent=kk?"Өз тестіңді жаса: сұрақтар қосып, дұрыс жауаптарды белгіле.":"Создайте собственный тест: добавьте вопросы и отметьте правильные ответы.";
-  $("createNote").textContent=kk?"Тесттер осы компьютердегі браузерде сақталады.":"Ваши тесты сохраняются в этом браузере на этом компьютере.";
+  $("createNote").textContent=kk?"Тесттер осы компьютердегі браузерде сақталады.":"Общие тесты доступны ученикам после публикации администратором.";
   $("openBuilder").textContent=kk?"＋ Тест қосу":"＋ Добавить тест";
   $("labelTestName").textContent=kk?"Тест атауы":"Название теста";
   $("labelGrade").textContent=kk?"Сынып":"Класс";
