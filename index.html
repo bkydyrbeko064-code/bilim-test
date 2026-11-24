@@ -116,7 +116,7 @@
   <h2 class="section-title" id="createTitle" class="admin-only">Создавай свои тесты</h2>
   <div class="card" id="testBuilderCard">
     <p id="createText">Создайте собственный тест: добавьте вопросы и отметьте правильные ответы.</p>
-    <p class="note" id="createNote">Тесты, созданные или импортированные в этом браузере, пока хранятся только здесь.</p>
+    <p class="note" id="createNote">Опубликованные тесты будут доступны ученикам на всех устройствах.</p>
     <button class="primary" type="button" id="openBuilder" onclick="toggleBuilder()">＋ Добавить тест</button>
     <div style="margin-top:18px;padding-top:16px;border-top:1px solid var(--line)">
       <h3>📂 Загрузить тест из файла</h3>
@@ -158,7 +158,7 @@
         <button class="primary" type="submit" id="saveTest">Сохранить тест</button>
         <button class="secondary" type="button" id="cancelBuilder" onclick="toggleBuilder(false)">Отмена</button>
       </div>
-      <p class="small-note" id="storageNote">Сохранённые тесты останутся в этом браузере. Очистка данных браузера может удалить их.</p>
+      <p class="small-note" id="storageNote">Тест будет опубликован в общей базе BilimTest и появится на других устройствах.</p>
     </form>
   </div>
 </main>
@@ -186,6 +186,7 @@ const demoData = [
 ];
 const STORAGE_KEY = "bilimtest_custom_tests_v1";
 let savedTests = loadSavedTests();
+let cloudTests = [];
 let current = null, pendingTest = null, studentFirstName = "", studentLastName = "", selected = null, questionIndex = 0, score = 0;
 
 const $ = id => document.getElementById(id);
@@ -205,7 +206,36 @@ for (let i=1;i<=11;i++) {
   option.textContent=`${i} ${kk ? "сынып" : "класс"}`;
   $("grade").append(option);
 }
-function allTests(){ return [...demoData, ...savedTests]; }
+function allTests(){ return [...demoData, ...cloudTests, ...savedTests.filter(t => !cloudTests.some(c => c.id === t.id))]; }
+
+
+async function loadCloudTests() {
+  if (!resultsDb) { render(); return; }
+  $("tests").textContent = "Загружаем общие тесты…";
+  const { data, error } = await resultsDb.from("public_tests")
+    .select("id,title,grade,subject,questions,created_at")
+    .order("created_at", { ascending: false });
+  if (error) {
+    console.error("BilimTest: не удалось загрузить общие тесты", error);
+    $("tests").textContent = "Не удалось загрузить общие тесты: " + error.message;
+    render();
+    return;
+  }
+  cloudTests = (data || []).filter(t => Array.isArray(t.questions) && t.questions.length);
+  render();
+}
+async function publishTest(test) {
+  if (!resultsDb) throw new Error("Нет подключения к Supabase.");
+  const { error } = await resultsDb.from("public_tests").insert({
+    id: String(test.id),
+    title: String(test.title),
+    grade: Number(test.grade),
+    subject: String(test.subject || "Другое"),
+    questions: test.questions
+  });
+  if (error) throw error;
+  await loadCloudTests();
+}
 
 function render() {
   const g=$("grade").value, s=$("subject").value;
@@ -379,10 +409,19 @@ $("builder").addEventListener("submit",function(event){
     title:$("testName").value.trim(), grade:Number($("testGrade").value),
     subject:$("testSubject").value, questions
   };
-  savedTests.push(test);
-  if(!saveSavedTests()){savedTests.pop();return;}
-  this.reset(); $("questionEditors").innerHTML=""; toggleBuilder(false); render();
-  alert(kk?"Тест сақталды!":"Тест сохранён!");
+  const saveButton = $("saveTest");
+  saveButton.disabled = true;
+  saveButton.textContent = "Публикуем…";
+  publishTest(test).then(() => {
+    this.reset(); $("questionEditors").innerHTML=""; toggleBuilder(false);
+    alert(kk?"Тест ортақ базаға жарияланды!":"Тест опубликован и теперь доступен на других устройствах!");
+  }).catch(error => {
+    console.error(error);
+    alert("Не удалось опубликовать тест: " + error.message + "\\nПроверьте SQL-настройку Supabase.");
+  }).finally(() => {
+    saveButton.disabled = false;
+    saveButton.textContent = kk ? "Тестті сақтау" : "Сохранить тест";
+  });
 });
 function toggleLang() {
   kk=!kk;
@@ -394,7 +433,7 @@ function toggleLang() {
   $("testsTitle").textContent=kk?"Қолжетімді тесттер":"Доступные тесты";
   $("createTitle").textContent=kk?"Өз тесттеріңді жаса":"Создавай свои тесты";
   $("createText").textContent=kk?"Өз тестіңді жаса: сұрақтар қосып, дұрыс жауаптарды белгіле.":"Создайте собственный тест: добавьте вопросы и отметьте правильные ответы.";
-  $("createNote").textContent=kk?"Тесттер осы компьютердегі браузерде сақталады.":"Тесты, созданные или импортированные в этом браузере, пока хранятся только здесь.";
+  $("createNote").textContent=kk?"Тесттер осы компьютердегі браузерде сақталады.":"Опубликованные тесты будут доступны ученикам на всех устройствах.";
   $("openBuilder").textContent=kk?"＋ Тест қосу":"＋ Добавить тест";
   $("labelTestName").textContent=kk?"Тест атауы":"Название теста";
   $("labelGrade").textContent=kk?"Сынып":"Класс";
@@ -402,7 +441,7 @@ function toggleLang() {
   $("addQuestion").textContent=kk?"＋ Сұрақ қосу":"＋ Добавить вопрос";
   $("saveTest").textContent=kk?"Тестті сақтау":"Сохранить тест";
   $("cancelBuilder").textContent=kk?"Болдырмау":"Отмена";
-  $("storageNote").textContent=kk?"Сақталған тесттер осы браузерде қалады. Браузер деректерін тазалау оларды өшіруі мүмкін.":"Сохранённые тесты останутся в этом браузере. Очистка данных браузера может удалить их.";
+  $("storageNote").textContent=kk?"Тест ортақ BilimTest базасына жарияланып, басқа құрылғыларда да көрінеді.":"Тест будет опубликован в общей базе BilimTest и появится на других устройствах.";
   $("grade").options[0].textContent=kk?"Барлық сыныптар":"Все классы";
   for(let i=1;i<$("grade").options.length;i++) $("grade").options[i].textContent=`${i} ${kk?"сынып":"класс"}`;
   $("subject").options[0].textContent=kk?"Барлық пәндер":"Все предметы";
@@ -597,10 +636,17 @@ function saveImportedTest(){
   const groups={};
   questions.forEach((q,i)=>{const source=importedQuestions[i];const group=source.subject||subject;(groups[group]??=[]).push(q);});
   const created=Object.entries(groups).map(([group,qs],i)=>({id:"import_"+Date.now()+"_"+i,title:Object.keys(groups).length>1?`${title} — ${group}`:title,grade,subject:group,questions:qs}));
-  savedTests.push(...created);
-  if(!saveSavedTests()){savedTests.splice(-created.length,created.length);return;}
-  $("importReview").classList.add("hidden");$("importReview").innerHTML="";$("importFile").value="";$("importStatus").textContent="Тест сохранён в этом браузере.";
-  render();alert(created.length>1?`Сохранено тестов: ${created.length} (по предметам).`:"Тест успешно сохранён!");
+  const saveButton = $("importReview").querySelector("button");
+  if (saveButton) { saveButton.disabled = true; saveButton.textContent = "Публикуем…"; }
+  Promise.all(created.map(test => publishTest(test))).then(() => {
+    $("importReview").classList.add("hidden");$("importReview").innerHTML="";
+    $("importFile").value="";$("importStatus").textContent="Тест опубликован в общей базе.";
+    alert(created.length>1?`Опубликовано тестов: ${created.length} (по предметам).`:"Тест успешно опубликован для всех устройств!");
+  }).catch(error => {
+    console.error(error);
+    $("importStatus").textContent = "Не удалось опубликовать: " + error.message;
+    alert("Ошибка публикации в Supabase: " + error.message);
+  }).finally(() => { if(saveButton) { saveButton.disabled = false; saveButton.textContent = "Сохранить импортированный тест"; } });
 }
 $("importFile").addEventListener("change",async function(){
   const file=this.files[0];if(!file)return;
@@ -612,7 +658,7 @@ $("importFile").addEventListener("change",async function(){
     showImportReview(questions);
   }catch(e){$("importStatus").textContent=e.message;alert(e.message);}
 });
-render();
+loadCloudTests();
 </script>
 </body>
 </html>
