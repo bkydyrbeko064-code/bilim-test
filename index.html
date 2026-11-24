@@ -54,7 +54,7 @@
     .danger{background:#fff0f0;color:#b42318}
     .small-note{font-size:13px;color:var(--muted)}
     .question-passage{background:#f6f9fd;border-left:4px solid #1676d2;padding:14px 16px;border-radius:8px;margin:12px 0 18px;white-space:normal}
-    .question-passage img,.question-image{display:block;max-width:100%;height:auto;margin:12px auto;border-radius:8px}
+    .question-extra{margin:12px 0;overflow-x:auto}.question-extra table{border-collapse:collapse;max-width:100%}.question-extra td,.question-extra th{border:1px solid var(--line);padding:6px 9px}.question-passage img,.question-image{display:block;max-width:100%;height:auto;margin:12px auto;border-radius:8px}
     .import-preview-passage{background:#f6f9fd;padding:12px;border-radius:8px;margin:8px 0}
     .import-preview-passage img{max-width:100%;height:auto}
     .hidden{display:none!important}
@@ -243,7 +243,9 @@ async function publishTest(test) {
 
 function render() {
   const g=$("grade").value, s=$("subject").value;
-  const list=allTests().filter(t=>(g==="all"||t.grade===Number(g))&&(s==="all"||t.subject===s));
+  // Hide temporary synchronization-check tests from the public test catalog.
+  const list=allTests().filter(t=>! /проверка\s+синхронизации/i.test(String(t.title||"")))
+    .filter(t=>(g==="all"||t.grade===Number(g))&&(s==="all"||t.subject===s));
   $("tests").innerHTML="";
   if (!list.length) {
     $("tests").textContent=kk?"Әзірге тест жоқ.":"Тестов пока нет.";
@@ -319,6 +321,13 @@ function showQuestion() {
     passage.className="question-passage";
     passage.innerHTML=q.passage;
     $("question").after(passage);
+  }
+  const oldExtra=$("questionExtra");
+  if(oldExtra) oldExtra.remove();
+  if(q.extraHtml){
+    const extra=document.createElement("div"); extra.id="questionExtra"; extra.className="question-extra";
+    extra.innerHTML=q.extraHtml;
+    $("question").after(extra);
   }
   const oldImage=$("questionImage");
   if(oldImage) oldImage.remove();
@@ -587,7 +596,8 @@ function parseKazakhHtmlDocument(html){
   const blocks=[...root.children].filter(el=>/^(P|TABLE|H1|H2|H3|H4|DIV|UL|OL)$/.test(el.tagName));
   const names=["Оқу сауаттылығы","Математика сауаттылығы","Жаратылыстану"];
   const groups=Object.fromEntries(names.map(n=>[n,[]]));
-  const labelToIndex={"А":0,"A":0,"Б":1,"B":1,"В":2,"C":2,"С":2,"D":3,"Д":3,"E":4,"Е":4};
+  // Kazakh answer labels in this document are А, В, С, Д, Е.
+  const labelToIndex={"А":0,"A":0,"Б":1,"B":1,"В":1,"C":2,"С":2,"D":3,"Д":3,"E":4,"Е":4};
   const cleanHtml=el=>{
     const clone=el.cloneNode(true);
     clone.querySelectorAll("script,style,iframe,object,embed").forEach(x=>x.remove());
@@ -608,23 +618,43 @@ function parseKazakhHtmlDocument(html){
   };
   const isStart=t=>/^(?:сұрақ\s*)?\d{1,2}\s*[.)]\s*\S/i.test(t);
   const getImgs=els=>els.flatMap(el=>[...el.querySelectorAll("img")].map(img=>img.getAttribute("src")).filter(src=>src&&src.startsWith("data:image/")));
-  let subject="", passageParts=[];
+  let subject="", passageParts=[], inKey=false, keySubject="";
+  const answerKeys=Object.fromEntries(names.map(n=>[n,[]]));
   for(let i=0;i<blocks.length;){
     const el=blocks[i], t=textOf(el), detected=subjectOf(t);
-    if(detected){subject=detected; passageParts=[]; i++; continue;}
-    if(/^(?:жауабы|дұрыс жауаптар?)/i.test(t)){i++;continue;}
+    if(/^(?:жауабы|дұрыс жауаптар?)/i.test(t)){inKey=true;subject="";passageParts=[];i++;continue;}
+    if(detected){
+      if(inKey){keySubject=detected;}
+      else {subject=detected;passageParts=[];}
+      i++;continue;
+    }
+    if(inKey){
+      const letter=t.toUpperCase().match(/^[АAБBВCСDДEЕ]$/)?.[0];
+      if(letter && keySubject){
+        const idx=labelToIndex[letter];
+        if(idx!==undefined) answerKeys[keySubject].push(idx);
+      }
+      i++;continue;
+    }
     if(!subject){i++;continue;}
+    // A numbered story title is a passage heading, not a question.
+    if(/^1\s*[.)]\s*Әтеш\s+пен\s+тотықұс/i.test(t)){
+      passageParts=[]; passageParts.push(cleanHtml(el)); i++; continue;
+    }
+    // A new unnumbered story heading starts a new passage within the same subject.
+    if(/^Тірілген\s+түлкі$/i.test(t)){
+      passageParts=[]; passageParts.push(cleanHtml(el)); i++; continue;
+    }
     if(!isStart(t)){
-      // Text and illustrations before the first question form the reading passage.
       if(t || el.querySelector("img")) passageParts.push(cleanHtml(el));
       i++; continue;
     }
     const qPrompt=t.replace(/^(?:сұрақ\s*)?\d{1,2}\s*[.)]\s*/i,"").trim();
     const qBlocks=[el]; let j=i+1;
-    while(j<blocks.length && !subjectOf(textOf(blocks[j])) && !isStart(textOf(blocks[j])) && !/^(?:жауабы|дұрыс жауаптар?)/i.test(textOf(blocks[j]))){
+    while(j<blocks.length && !subjectOf(textOf(blocks[j])) && !isStart(textOf(blocks[j])) && !/^Тірілген\s+түлкі$/i.test(textOf(blocks[j])) && !/^(?:жауабы|дұрыс жауаптар?)/i.test(textOf(blocks[j]))){
       qBlocks.push(blocks[j]); j++;
     }
-    const combined=qBlocks.map(textOf).join(" ");
+    const combined=qBlocks.filter(x=>x.tagName!=="TABLE").map(textOf).join(" ");
     const re=/(^|\s)(А|A|Б|B|В|C|С|D|Д|E|Е)\s*[).:]\s*/g;
     const found=[];let m;
     while((m=re.exec(combined))!==null) found.push({idx:labelToIndex[m[2].toUpperCase()],start:m.index+m[1].length,end:m.index+m[0].length});
@@ -636,12 +666,32 @@ function parseKazakhHtmlDocument(html){
     opts.sort((a,b)=>a.idx-b.idx);
     if(qPrompt && opts.length>=4){
       const images=getImgs(qBlocks);
+      const extraHtml=qBlocks.filter(x=>x.tagName==="TABLE").map(cleanHtml).join("");
       const passage=passageParts.join("");
-      groups[subject].push({q:qPrompt,a:opts.slice(0,5).map(x=>x.text),correct:-1,subject,passage,images});
+      groups[subject].push({q:qPrompt,a:opts.slice(0,5).map(x=>x.text),correct:-1,subject,passage,images,extraHtml});
     }
     i=j;
   }
+  // Apply the answer lists at the end of the Word document to questions in order.
+  names.forEach(name=>{
+    groups[name].forEach((q,index)=>{
+      if(answerKeys[name][index]!==undefined) q.correct=answerKeys[name][index];
+    });
+  });
   return names.flatMap(n=>groups[n]);
+}
+async function compressImportedImage(dataUrl){
+  // Keep embedded Word pictures small enough for cloud storage and mobile loading.
+  try{
+    const img=new Image();
+    await new Promise((resolve,reject)=>{img.onload=resolve;img.onerror=reject;img.src=dataUrl;});
+    const maxSide=1400, scale=Math.min(1,maxSide/Math.max(img.naturalWidth,img.naturalHeight));
+    const canvas=document.createElement("canvas");
+    canvas.width=Math.max(1,Math.round(img.naturalWidth*scale));
+    canvas.height=Math.max(1,Math.round(img.naturalHeight*scale));
+    canvas.getContext("2d").drawImage(img,0,0,canvas.width,canvas.height);
+    return canvas.toDataURL("image/jpeg",0.82);
+  }catch(e){return dataUrl;}
 }
 async function extractFile(file){
   const ext=file.name.split(".").pop().toLowerCase();
@@ -656,7 +706,7 @@ async function extractFile(file){
     const data=await file.arrayBuffer();
     // Convert Word images to data URLs so they travel with the imported test.
     const result=await mammoth.convertToHtml({arrayBuffer:data},{
-      convertImage:mammoth.images.inline(async image=>({src:await image.read("base64").then(b64=>`data:${image.contentType};base64,${b64}`)}))
+      convertImage:mammoth.images.inline(async image=>({src:await image.read("base64").then(b64=>compressImportedImage(`data:${image.contentType};base64,${b64}`))}))
     });
     const parsed=parseKazakhHtmlDocument(result.value);
     if(parsed.length) return parsed;
@@ -685,6 +735,7 @@ function showImportReview(questions){
     const h=document.createElement("h4");h.textContent=`Вопрос ${i+1}`;box.append(h);
     if(q.passage){const passage=document.createElement("div");passage.className="import-preview-passage";passage.innerHTML=q.passage;box.append(passage);}
     if(Array.isArray(q.images)) q.images.forEach(src=>{const img=document.createElement("img");img.src=src;img.style.maxWidth="100%";img.style.maxHeight="220px";box.append(img);});
+    if(q.extraHtml){const extra=document.createElement("div");extra.className="question-extra";extra.innerHTML=q.extraHtml;box.append(extra);}
     const qi=document.createElement("input");qi.value=q.q;qi.maxLength=500;qi.setAttribute("aria-label","Текст вопроса");box.append(qi);
     const answerInputs=[];
     q.a.forEach((a,j)=>{const label=document.createElement("label");label.textContent=`Вариант ${"ABCDE"[j]}`;const input=document.createElement("input");input.value=a;input.maxLength=200;label.append(input);box.append(label);answerInputs.push(input);});
@@ -705,7 +756,7 @@ function saveImportedTest(){
   const grade=Number(prompt("Для какого класса? Введите число от 1 до 11:","5"));
   if(!Number.isInteger(grade)||grade<1||grade>11){alert("Укажите класс от 1 до 11.");return;}
   const subject=prompt("Предмет (например: Математика, История, Биология, Английский):","Математика")||"Другое";
-  const questions=importedQuestions.map(q=>({q:q._inputs.qi.value.trim(),a:q._inputs.answerInputs.map(x=>x.value.trim()),correct:Number(q._inputs.sel.value),...(q.passage?{passage:q.passage}:{}),...(Array.isArray(q.images)&&q.images.length?{images:q.images}:{})}));
+  const questions=importedQuestions.map(q=>({q:q._inputs.qi.value.trim(),a:q._inputs.answerInputs.map(x=>x.value.trim()),correct:Number(q._inputs.sel.value),...(q.passage?{passage:q.passage}:{}),...(Array.isArray(q.images)&&q.images.length?{images:q.images}:{}),...(q.extraHtml?{extraHtml:q.extraHtml}:{})}));
   if(questions.some(q=>!q.q||q.a.some(x=>!x)||!Number.isInteger(q.correct)||q.correct<0||q.correct>4)){
     alert("Заполните вопросы и все варианты, а также выберите правильный ответ для каждого вопроса.");return;
   }
