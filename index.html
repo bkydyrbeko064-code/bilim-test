@@ -1,4 +1,4 @@
-<!doctype html>
+<<!doctype html>
 <html lang="ru">
 <head>
   <meta charset="utf-8">
@@ -672,6 +672,18 @@ function parseKazakhHtmlDocument(html){
     }
     i=j;
   }
+  // Remove repeated Word paragraphs/questions before applying the answer key.
+  // Some DOCX conversions repeat the first question at a page boundary.
+  names.forEach(name=>{
+    const seen=new Set();
+    groups[name]=groups[name].filter(q=>{
+      const normalize=value=>String(value||"").toLowerCase().replace(/\s+/g," ").replace(/[^\p{L}\p{N}]+/gu,"").trim();
+      const signature=normalize(q.q)+"|"+q.a.map(normalize).join("|");
+      if(seen.has(signature)) return false;
+      seen.add(signature);
+      return true;
+    });
+  });
   // Apply the answer lists at the end of the Word document to questions in order.
   names.forEach(name=>{
     groups[name].forEach((q,index)=>{
