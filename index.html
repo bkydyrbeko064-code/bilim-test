@@ -1,4 +1,4 @@
-<<!doctype html>
+<!doctype html>
 <html lang="ru">
 <head>
   <meta charset="utf-8">
@@ -79,7 +79,7 @@
 
 <main>
   <h2 id="choose">Выбери свой класс</h2>
-  <div class="filters">
+  <div class="filters" id="filters">
     <select id="grade" aria-label="Класс" onchange="render()">
       <option value="all">Все классы</option>
     </select>
@@ -242,6 +242,14 @@ async function publishTest(test) {
 }
 
 function render() {
+  // Public catalog is temporarily hidden. Tests remain in Supabase/local storage;
+  // synchronization and publishing continue to work normally.
+  $("filters").style.display="none";
+  $("testsTitle").style.display="none";
+  $("tests").innerHTML="";
+  $("tests").style.display="none";
+  return;
+
   const g=$("grade").value, s=$("subject").value;
   // Hide temporary synchronization-check tests from the public test catalog.
   const list=allTests().filter(t=>! /проверка\s+синхронизации/i.test(String(t.title||"")))
