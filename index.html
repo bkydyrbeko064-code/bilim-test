@@ -120,7 +120,7 @@
     <button class="primary" type="button" id="openBuilder" onclick="toggleBuilder()">＋ Добавить тест</button>
     <div style="margin-top:18px;padding-top:16px;border-top:1px solid var(--line)">
       <h3>📂 Загрузить тест из файла</h3>
-      <p class="note">Excel: столбцы Вопрос, A, B, C, D, Правильный ответ. Word/PDF: каждый вопрос отдельным блоком, варианты A)–D), затем «Ответ: B». После загрузки обязательно проверьте распознавание.</p>
+      <p class="note">Excel: столбцы Вопрос, A, B, C, D, Правильный ответ. Word/PDF: распознаются пронумерованные вопросы и варианты A–E, в том числе несколько вариантов в одной строке. После загрузки обязательно проверьте каждый вопрос и правильный ответ; задания на изображениях требуют проверки.</p>
       <label style="display:grid;gap:8px;font-weight:700">Выберите файл
         <input id="importFile" type="file" accept=".xlsx,.xls,.docx,.pdf" style="width:100%;padding:10px;border:1px solid #cfd9e6;border-radius:9px;background:#fff">
       </label>
@@ -490,7 +490,7 @@ function parseTextQuestions(text){
   const normalized=text.replace(/\r/g,"").replace(/[ \t]+/g," ");
   // Supports the user's Kazakh Word layout: subject sections, numbered questions,
   // options А/В/С/Д/Е, and answer keys collected at the end.
-  if(/Жауабы\s*:/i.test(normalized) && /Оқу\s+сауатт|Математика\s+сауаттылығы|Жаратылыстану/i.test(normalized)){
+  if(/Оқу\s+сауатт|Математика\s+сауаттылығы|Жаратылыстану/i.test(normalized) && /(?:^|\n)\s*\d{1,2}\s*[.)]/m.test(normalized)){
     return parseKazakhTestDocument(normalized);
   }
   const chunks=normalized.split(/(?=(?:^|\n)\s*(?:Вопрос\s*\d*|Сұрақ\s*\d*|Question\s*\d*|\d+[.)])\s*[:.)-]?)/im);
@@ -510,71 +510,55 @@ function parseTextQuestions(text){
   return out;
 }
 function parseKazakhTestDocument(text){
-  // Supports Word documents where questions are numbered by Word's automatic
-  // numbering (the number may be absent from extracted text), options use А./А),
-  // and the answer key is grouped by subject at the end.
-  const lines=text.replace(/\r/g,"").split("\n").map(x=>x.replace(/\u00a0/g," ").replace(/[ \t]+/g," ").trim()).filter(Boolean);
+  const lines=text.replace(/\r/g,"").replace(/\u00a0/g," ")
+    .split("\n").map(x=>x.replace(/[ \t]+/g," ").trim()).filter(Boolean);
   const subjectNames=["Оқу сауаттылығы","Математика сауаттылығы","Жаратылыстану"];
   const groups=Object.fromEntries(subjectNames.map(n=>[n,[]]));
-  const keyLists={}; let subject="",inKey=false,keySubject="";
-  const letterMap={"А":0,"A":0,"Б":1,"В":1,"B":1,"С":2,"C":2,"Д":3,"D":3,"Е":4,"E":4};
-  const optionRe=/^([АБВСДЕABCDE])\s*[).:]\s*(.+)$/i;
-  const keyLetterRe=/^([АБВСДЕABCDE])\s*[).:]?\s*$/i;
-  const questionNumberRe=/^\d{1,2}\s*[.)]\s*(.+)$/;
-  function identifySubject(line){
-    const s=line.toLowerCase().replace(/ё/g,"е");
-    if(/оқу\s+сауатт+ылығы/.test(s))return subjectNames[0];
-    if(/математика\s+сауаттылығы/.test(s))return subjectNames[1];
-    if(/жаратылыстану/.test(s))return subjectNames[2];
+  const labelToIndex={"А":0,"A":0,"Б":1,"B":1,"В":2,"C":2,"С":2,"D":3,"Д":3,"E":4,"Е":4};
+  const subjectOf=line=>{
+    const v=line.toLowerCase().replace(/ё/g,"е");
+    if(/оқу\s+сауатт/.test(v)) return subjectNames[0];
+    if(/математика\s+сауатт/.test(v)) return subjectNames[1];
+    if(/жаратылыстану/.test(v)) return subjectNames[2];
     return "";
+  };
+  const isKeyHeading=line=>/^(?:жауабы|дұрыс\s+жауаптар?)\s*:/i.test(line);
+  const isQuestionStart=line=>/^(?:сұрақ\s*)?\d{1,2}\s*[.)]\s*\S/i.test(line);
+  function extractOptions(block){
+    const re=/(^|\s)(А|A|Б|B|В|C|С|D|Д|E|Е)\s*[).:]\s*/g;
+    const found=[]; let m;
+    while((m=re.exec(block))!==null){
+      const labelStart=m.index+m[1].length;
+      const contentStart=m.index+m[0].length;
+      found.push({idx:labelToIndex[m[2].toUpperCase()],labelStart,contentStart});
+    }
+    if(found.length<4) return null;
+    const opts=[];
+    for(let k=0;k<found.length;k++){
+      const stop=k+1<found.length?found[k+1].labelStart:block.length;
+      const value=block.slice(found[k].contentStart,stop).trim();
+      if(value && !opts.some(x=>x.idx===found[k].idx)) opts.push({idx:found[k].idx,text:value});
+    }
+    opts.sort((x,y)=>x.idx-y.idx);
+    return opts.length>=4?opts.slice(0,5).map(x=>x.text):null;
   }
+  let subject="";
   for(let i=0;i<lines.length;i++){
-    const line=lines[i];
-    if(/^жауабы\s*:/i.test(line)){inKey=true;subject="";keySubject="";continue;}
-    const detected=identifySubject(line);
-    if(detected){
-      if(inKey)keySubject=detected;
-      else subject=detected;
-      continue;
+    const detected=subjectOf(lines[i]);
+    if(detected){subject=detected;continue;}
+    if(!subject || !isQuestionStart(lines[i]) || isKeyHeading(lines[i])) continue;
+    const prompt=lines[i].replace(/^(?:сұрақ\s*)?\d{1,2}\s*[.)]\s*/i,"").trim();
+    let block="",j=i+1;
+    while(j<lines.length && !subjectOf(lines[j]) && !isQuestionStart(lines[j]) && !isKeyHeading(lines[j])){
+      block+=" "+lines[j]; j++;
     }
-    if(inKey){
-      const km=line.match(keyLetterRe);
-      if(km && keySubject){
-        const letter=km[1].toUpperCase();
-        const idx=letterMap[letter];
-        if(Number.isInteger(idx))(keyLists[keySubject]??=[]).push(idx);
-      }
-      continue;
-    }
-    if(!subject)continue;
-    // A question prompt may have a Word auto-number not present in plain text.
-    let prompt=line.match(questionNumberRe);
-    let promptText=prompt?prompt[1].trim():line;
-    if(optionRe.test(line))continue;
-    if(i+1>=lines.length || !optionRe.test(lines[i+1]))continue;
-    const opts=[]; let j=i+1;
-    while(j<lines.length){
-      const om=lines[j].match(optionRe);
-      if(!om)break;
-      const letter=om[1].toUpperCase();
-      const idx=letterMap[letter];
-      if(Number.isInteger(idx))opts.push({idx,text:om[2].trim()});
-      j++;
-    }
-    // A valid multiple-choice question in this document has four or five choices.
-    if(opts.length>=4){
-      const ordered=opts.sort((a,b)=>a.idx-b.idx);
-      // Keep the original prompt intact; do not mistake story headings for questions.
-      groups[subject].push({q:promptText,a:ordered.map(o=>o.text),correct:-1,subject});
+    const answers=extractOptions(block);
+    if(prompt && answers){
+      groups[subject].push({q:prompt,a:answers,correct:-1,subject});
       i=j-1;
     }
   }
-  // The answer key lists answers in the same order as questions within each subject.
-  for(const name of subjectNames){
-    const answers=keyLists[name]||[];
-    (groups[name]||[]).forEach((q,i)=>{if(Number.isInteger(answers[i]))q.correct=answers[i];});
-  }
-  return subjectNames.flatMap(name=>groups[name]||[]);
+  return subjectNames.flatMap(name=>groups[name]);
 }
 async function extractFile(file){
   const ext=file.name.split(".").pop().toLowerCase();
